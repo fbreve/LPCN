@@ -5,7 +5,7 @@
 % Propagation through Complex Networks. Expert System With Applications, 
 % v. 123, p.18 – 33, 2019.
 %
-% by Fabricio Breve - 23/01/2019
+% by Fabricio Breve - Last update: 23/01/2019
 %
 % Loading example image
 img = imread('ralph.jpg');
