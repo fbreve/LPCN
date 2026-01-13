@@ -1,262 +1,275 @@
-% Interactive Image Segmentation using Label Propagation through Complex Networks
-% by Fabricio Breve - 21/01/2019
+%LPCN Interactive Image Segmentation using Label Propagation through Complex Networks
+% by Fabricio Breve - Last Update: 13/01/2026
 %
 % If you use this algorithm, please cite:
 %
 % BREVE, Fabricio Aparecido. Interactive Image Segmentation using Label
-% Propagation through Complex Networks. Expert System With Applications, 
+% Propagation through Complex Networks. Expert Systems with Applications, 
 % v. 123, p.18 – 33, 2019.
 %
-% Usage: [owner, pot, ti1, ti2] = cnsslis9(img, imgslab, fw, k, sigma, disttype, omega, maxiter)
+% [owner, pot, ti1, ti2] = lpcn(img, imgslab, fw, k, sigma, disttype, omega, maxiter)
 %
 % INPUT:
-% img       - Image to be segmented (24 bits, 3 channels - RGB)
-% imgslab   - Image with labeled/unlabeled pixel information (0 is reserved
-%             for ignored background, 64 - background class, 128 -
-%             unlabeled pixels, 255 - foreground class. For multiclass use
-%             [1~63; 65~127; 129~254] for other classes. (Obs: use only grayscale 8-bit indexed image)
-% fw        - vector of feature weights
-% k         - each node is connected to its k-neirest neighbors
-% disttype  - use 'euclidean', etc.
-% omega     - Default: 0.001 (lower it to stop earlier, accuracy may be lower; increase to increase accuracy)
-% maxiter   - maximum amount of iterations
+%   img      - RGB image (uint8, HxWx3)
+%   imgslab  - scribble image (uint8, HxW) with labels as described below:
+%              0   : ignored background
+%              64  : background class
+%              128 : unlabeled pixels
+%              255 : foreground class
+%              1–63,65–127,129–254 : additional classes (grayscale 8-bit indexed)
+%   fw       - 1x9 vector of feature weights (default: ones(1,9))
+%   k        - number of nearest neighbors in phase 1 (default: 10)
+%   sigma    - Gaussian width for edge weights (default: 0.5)
+%   disttype - distance type for knnsearch, e.g. 'euclidean' (default: 'euclidean')
+%   omega    - convergence tolerance (default: 0.0001)
+%   maxiter  - maximum number of iterations in each phase (default: 5e5)
 %
 % OUTPUT:
-% owner     - vector of classes assigned to each data item
-% pot       - continuos-output with pertinence of each data item to each
-%             class
-% ti1       - total iterations executed on phase 1
-% ti2       - total iterations executed on phase 2
+%   owner    - class index assigned to each pixel (vector of length H*W)
+%   pot      - potentials (H*W x nclass) - pertinence to each class
+%   ti1      - number of iterations executed in phase 1
+%   ti2      - number of iterations executed in phase 2
 
 function [owner, pot, ti1, ti2] = lpcn(img, imgslab, fw, k, sigma, disttype, omega, maxiter)
+
 if (nargin < 8) || isempty(maxiter)
-    maxiter = 500000; % número de iterações
+    maxiter =  5e5; % 500000
 end
 if (nargin < 7) || isempty(omega)
-    omega = 0.0001;
+    omega = 1e-4; % 0.0001
 end
 if (nargin < 6) || isempty(disttype)
-    disttype = 'euclidean'; % distância euclidiana não normalizada
+    disttype = 'euclidean';
 end
 if (nargin < 5) || isempty(sigma)
     sigma = 0.5;
 end
 if (nargin < 4) || isempty(k)
-    k = 10; % quantidade de vizinhos mais próximos
+    k = 10;
 end
 if (nargin < 3) || isempty(fw)
     fw = ones(1,9);
     %fw = [1 1 0.5 0.5 0.5 0.5 0.5 0.5 0.5];
 end
-% tratamento da entrada
-k = uint16(k);
+% tratamento de entrada
+k   = uint16(k);
+fw  = double(fw(:).');  % garante linha double de tamanho 9
 ti1 = 0;
 ti2 = 0;
 
-if k>0
+if k > 0
     % reduzindo imagem
-    rs_img = imresize(img,1/3,'bicubic');
-    otherlabels = [1:63 65:127 129:254];
-    if isempty(intersect(unique(imgslab),otherlabels)) % se há apenas duas classes
-        rs_imgslab = imresize(imgslab,1/3,'bilinear');
-        rs_imgslab(rs_imgslab<64 & rs_imgslab>0) = 64;
-        rs_imgslab(rs_imgslab<128 & rs_imgslab>64) = 64;
-        rs_imgslab(rs_imgslab>128) = 255;
-    else % mais de duas classes
-        rs_imgslab = imresize(imgslab,1/3,'nearest');
-    end       
-   
-    [rs_dim,qtnode,X,slabel,nodeval,nclass] = getFeatures(rs_img,rs_imgslab,fw);
-    
-    % já estamos normalizando de qualquer forma
-    if strcmp(disttype,'seuclidean')==1
-        disttype='euclidean';
-    end
-    
-    indval = find(nodeval);     % pega só os índices dos pixels que não são do fundo ignorado
-    Xval = X(indval,:);         % cria lista de pixels válidos (que não são do fundo ignorado)
-    qtnodeval = size(indval,1); % quantidade de nós válidos (pixels válidos)
-    slabelval = slabel(indval); % rótulos dos pixels válidos (não são do fundo ignorado)    
-    
-    nnonlabeled = sum(slabelval==0); % quantidade de nós não rotulados
-         
-    % lista de nós não rotulados
-    indnonlabeled = uint32(find(slabelval==0));
-    % lista de nós rotulados
-    labelednodes = uint32(find(slabelval>0));
-    
-    % encontrando k-vizinhos mais próximos
-    [KNN,KNND] = knnsearch(Xval,Xval(indnonlabeled,:),'K',k+1,'NSMethod','kdtree','Distance',disttype);
-    KNN = uint32(KNN);
-    clear XVal;
-    KNN = KNN(:,2:end); % eliminando o elemento como vizinho de si mesmo
-    KNND = KNND(:,2:end); 
-    KNND = exp((-KNND.^2)./(2*sigma^2));
-    % ajustando todas as distâncias na máxima possível
-    potval = repmat(1/nclass,qtnodeval,nclass);   
-    % zerando potenciais dos nós rotulados
-    potval(labelednodes,:) = 0;
-    % ajustando potencial da classe respectiva do nó rotulado para máximo
-    potval(sub2ind(size(potval),labelednodes,slabelval(labelednodes))) = 1;
-    % calling the mex function
-    ti1 = lpcnloop(maxiter,nnonlabeled,indnonlabeled,omega,potval,k,KNN,KNND);
+    rs_img = imresize(img, 1/3, 'bicubic');
 
-    clear KNN slabelval KNNND;
-           
-    pot = zeros(qtnode,nclass);
-    pot(:,1) = 1; % nós de fundo serão associados à mesma classe da cor de índice 64.
-    pot(indval,:)=potval;
-    
+    otherlabels = [1:63 65:127 129:254];
+    hasOther = ~isempty(intersect(unique(imgslab), otherlabels));
+
+    if ~hasOther % apenas duas classes
+        rs_imgslab = imresize(imgslab, 1/3, 'bilinear');
+        rs_imgslab(rs_imgslab < 64 & rs_imgslab > 0)   = 64;
+        rs_imgslab(rs_imgslab < 128 & rs_imgslab > 64) = 64;
+        rs_imgslab(rs_imgslab > 128)                   = 255;
+    else % mais de duas classes
+        rs_imgslab = imresize(imgslab, 1/3, 'nearest');
+    end
+
+    [rs_dim, qtnode_rs, X_rs, slabel_rs, nodeval_rs, nclass] = ...
+        getFeatures(rs_img, rs_imgslab, fw);
+
+    % já estamos normalizando de qualquer forma
+    if strcmp(disttype, 'seuclidean')
+        disttype = 'euclidean';
+    end
+
+    % pixels válidos (não fundo ignorado)
+    indval    = find(nodeval_rs);
+    Xval      = X_rs(indval, :);
+    qtnodeval = numel(indval);
+    slabelval = slabel_rs(indval);
+
+    % não rotulados / rotulados
+    indnonlabeled = uint32(find(slabelval == 0));
+    labelednodes  = uint32(find(slabelval > 0));
+    nnonlabeled   = numel(indnonlabeled);
+
+    % k-vizinhos mais próximos
+    [KNN, KNND] = knnsearch(Xval, Xval(indnonlabeled, :), ...
+                            'K', double(k) + 1, ...
+                            'NSMethod', 'kdtree', ...
+                            'Distance', disttype);
+    KNN  = uint32(KNN(:, 2:end));    % elimina self
+    KNND = KNND(:, 2:end);
+    KNND = exp((-KNND.^2) ./ (2*sigma^2));
+
+    % potenciais iniciais
+    potval = repmat(1/nclass, qtnodeval, nclass);
+    potval(labelednodes, :) = 0;
+    potval(sub2ind(size(potval), labelednodes, slabelval(labelednodes))) = 1;
+
+    % chamada MEX
+    ti1 = lpcnloop(maxiter, nnonlabeled, indnonlabeled, omega, potval, k, KNN, KNND);
+
+    clear KNN KNND slabelval Xval;
+
+    pot = zeros(qtnode_rs, nclass);
+    pot(:,1) = 1; % fundo ignorado tratado como classe 1
+    pot(indval, :) = potval;
+
     clear potval;
 end
 
-[dim,qtnode,X,slabel,nodeval,nclass] = getFeatures(img,imgslab,fw);
-% Redimensionar matriz de potenciais
-% (antes de redimensionar é preciso passar para matriz de 3 dimensões e
-% depois voltar para o formato anterior)
-if k>0
-    pot = reshape(imresize(reshape(pot,rs_dim(1),rs_dim(2),nclass),[dim(1) dim(2)],'bilinear'),qtnode,nclass);
+[dim, qtnode, X, slabel, nodeval, nclass] = getFeatures(img, imgslab, fw);
+
+if k > 0
+    % pot é qtnode_rs x nclass; precisamos voltar para H x W e depois para qtnode
+    pot = reshape( ...
+        imresize(reshape(pot, rs_dim(1), rs_dim(2), nclass), ...
+                 [dim(1) dim(2)], 'bilinear'), ...
+        qtnode, nclass);
 else
-    pot = repmat(1/nclass,qtnode,nclass);
+    pot = repmat(1/nclass, qtnode, nclass);
 end
 
-% encontrando nos rotulados
-labelednodes = find(slabel>0);
-% zerando potenciais dos nós rotulados
-pot(labelednodes,:) = 0;
-% ajustando potencial da classe respectiva do nó rotulado para 1
-pot(sub2ind(size(pot),labelednodes,slabel(labelednodes))) = 1;
+% nós rotulados na resolução original
+labelednodes = find(slabel > 0);
+pot(labelednodes, :) = 0;
+pot(sub2ind(size(pot), labelednodes, slabel(labelednodes))) = 1;
 
-% PARTE 2!
-%disp('Parte 2: Encontrando vizinhos...');
-if k>0 
-    indefnodesb = max(pot,[],2) < 1; % vetor onde 1 é nó indefinido e 0 é definido    
+% PARTE 2
+if k > 0
+    indefnodesb = max(pot, [], 2) < 1;  % 1 se nó indefinido
 else
-    indefnodesb = nodeval; % dessa forma todos os vetores de dominância ficam variáveis e a propagação ocorre entre todos os pixels. Por algum motivo isso funciona melhor na base da Microsoft.
+    indefnodesb = nodeval;              % todos válidos propagam
 end
-indefnodes = uint32(find(indefnodesb)); % lista de nós indefinidos    
-indefnodesc = size(indefnodes,1); % contagem de nós indefinidos
 
-if indefnodesc>0
-    
-    %fprintf('Parte 2: %i nós indefinidos. Pegando colaboração de pixels vizinhos\n',size(indefnodes,1))
-    
-    Ndist = zeros(size(X,1),8);
-    Nlist = zeros(size(X,1),8,'uint32');
-    Nsize = zeros(size(X,1),1,'uint8');
-    % Pesos das ligações horizontais
-    for i=1:dim(1)
-        for j=1:dim(2)-1
-            ind1 = i+(j-1)*dim(1);
+indefnodes  = uint32(find(indefnodesb));
+indefnodesc = numel(indefnodes);
+
+if indefnodesc > 0
+    N = size(X,1);
+    Ndist = zeros(N, 8);
+    Nlist = zeros(N, 8, 'uint32');
+    Nsize = zeros(N, 1, 'uint8');
+
+    % horizontais
+    for i = 1:dim(1)
+        for j = 1:dim(2)-1
+            ind1 = i + (j-1)*dim(1);
             ind2 = ind1 + dim(1);
             if indefnodesb(ind1) || indefnodesb(ind2)
                 p2addNeighbor;
             end
         end
     end
-    % Peso das ligações diagonais (\)
-    for i=1:dim(1)-1
-        for j=1:dim(2)-1
-            ind1 = i+(j-1)*dim(1);
-            ind2 = ind1+dim(1)+1;
+    % diagonais (\)
+    for i = 1:dim(1)-1
+        for j = 1:dim(2)-1
+            ind1 = i + (j-1)*dim(1);
+            ind2 = ind1 + dim(1) + 1;
             if indefnodesb(ind1) || indefnodesb(ind2)
                 p2addNeighbor;
             end
         end
     end
-    % Peso das ligações verticais
-    for i=1:dim(1)-1
-        for j=1:dim(2)
-            ind1 = i+(j-1)*dim(1);
-            ind2 = ind1+1;
+    % verticais
+    for i = 1:dim(1)-1
+        for j = 1:dim(2)
+            ind1 = i + (j-1)*dim(1);
+            ind2 = ind1 + 1;
             if indefnodesb(ind1) || indefnodesb(ind2)
                 p2addNeighbor;
             end
         end
     end
-    % Peso das ligações diagonais (/)
-    for i=1:dim(1)-1
-        for j=2:dim(2)
-            ind1 = i+(j-1)*dim(1);
-            ind2 = ind1-dim(1)+1;
+    % diagonais (/)
+    for i = 1:dim(1)-1
+        for j = 2:dim(2)
+            ind1 = i + (j-1)*dim(1);
+            ind2 = ind1 - dim(1) + 1;
             if indefnodesb(ind1) || indefnodesb(ind2)
                 p2addNeighbor;
             end
         end
-    end
-    clear X;
-    % aplicando Gaussiana nas distâncias
-    Ndist = exp((-Ndist.^2)./(2*sigma^2));
-    % constantes
-    npart = indefnodesc; % quantidade de nós ainda não rotulados
-    % variável para guardar máximo potencial mais alto médio
-    % chamando o arquivo mex do strwalk25
-    %disp('Parte 2: Propagação de rótulos...');
-    ti2 = lpcnloop2(maxiter, npart, nclass, omega, indefnodes, slabel, Nsize, Nlist, Ndist, pot);
-    
-    if k==0
-        % zerando potenciais dos nós rotulados
-        pot(labelednodes,:) = 0;
-        % ajustando potencial da classe respectiva do nó rotulado para 1
-        pot(sub2ind(size(pot),labelednodes,slabel(labelednodes))) = 1;
     end
 
+    clear X;
+
+    % pesos gaussianos
+    Ndist = exp((-Ndist.^2) ./ (2*sigma^2));
+
+    % propagação fase 2
+    npart = indefnodesc;
+    ti2   = lpcnloop2(maxiter, npart, nclass, omega, ...
+                      indefnodes, slabel, Nsize, Nlist, Ndist, pot);
+
+    if k == 0
+        pot(labelednodes, :) = 0;
+        pot(sub2ind(size(pot), labelednodes, slabel(labelednodes))) = 1;
+    end
 end
-[~,owner] = max(pot,[],2);
+
+[~, owner] = max(pot, [], 2);
 
     function p2addNeighbor
         Nsize(ind1) = Nsize(ind1) + 1;
         Nsize(ind2) = Nsize(ind2) + 1;
-        Ndist(ind1,Nsize(ind1)) = norm(X(ind1,:)-X(ind2,:));
-        Ndist(ind2,Nsize(ind2)) = Ndist(ind1,Nsize(ind1));
-        Nlist(ind1,Nsize(ind1)) = ind2;
-        Nlist(ind2,Nsize(ind2)) = ind1;
+        d = norm(X(ind1,:) - X(ind2,:));
+        Ndist(ind1, Nsize(ind1)) = d;
+        Ndist(ind2, Nsize(ind2)) = d;
+        Nlist(ind1, Nsize(ind1)) = uint32(ind2);
+        Nlist(ind2, Nsize(ind2)) = uint32(ind1);
     end
-
 end
 
+
 function [dim,qtnode,X,slabel,nodeval,nclass] = getFeatures(img,imgslab,fw)
-
-% Atenção: Atributo Linha e HSV estão errados em todas as versões anteriores deste algoritmo!
-
-% Dimensões da imagem
-dim = size(img);
+dim    = size(img);              % H x W x 3
 qtnode = dim(1)*dim(2);
-X = zeros(qtnode,9);
-% primeiro e segundo elementos são linha e coluna normalizadas no intervalo 0:1
-X(:,1:2) = [repmat(((1:dim(1))/dim(1))',dim(2),1), reshape(repmat((1:dim(1))/dim(1),dim(2),1),dim(1)*dim(2),1)]; 
-% depois vem os 3 elementos RGB normalizados em 0:1
-imgvec = double(squeeze(reshape(img,dim(1)*dim(2),1,3)))/255;
+
+X = zeros(qtnode, 9);
+
+% linha e coluna normalizadas 0..1
+rows = (1:dim(1))/dim(1);
+cols = (1:dim(2))/dim(2);
+X(:,1:2) = [repmat(rows', dim(2), 1), ...
+            reshape(repmat(cols, dim(1), 1), qtnode, 1)];
+
+% RGB normalizado
+imgvec = double(reshape(img, qtnode, 3)) / 255;
 X(:,3:5) = imgvec;
-% depois vem os 3 elementos HSV
-imghsv = rgb2hsv(double(img)/255);
-X(:,6) = squeeze(reshape(imghsv(:,:,3),dim(1)*dim(2),1,1));
-% em seguida ExR, ExG, e ExB
+
+% HSV (V)
+imghsv = rgb2hsv(double(img) / 255);
+X(:,6) = reshape(imghsv(:,:,3), qtnode, 1);
+
+% ExR, ExG, ExB
 exr = 2.*double(img(:,:,1)) - double(img(:,:,2)) - double(img(:,:,3));
 exg = 2.*double(img(:,:,2)) - double(img(:,:,1)) - double(img(:,:,3));
 exb = 2.*double(img(:,:,3)) - double(img(:,:,1)) - double(img(:,:,2));
 imgex = cat(3, exr, exg, exb);
-clear exr exg exb;
-X(:,7:9) = squeeze(reshape(imgex,dim(1)*dim(2),1,3));
-X = zscore(X) .* repmat(fw,qtnode,1);
-% Converter imagem com rótulos em vetor de rótulos
-slabelraw = reshape(imgslab,dim(1)*dim(2),1);
-% montar vetor onde 0 é nó do fundo não considerado e 1 é nó válido
-nodeval = zeros(qtnode,1);
-nodeval(slabelraw~=0)=1;
-% ajustar vetor de rótulos
-slabel = zeros(qtnode,1,'uint16');
-slabel(slabelraw==0)=1; % fundo não considerado
-slabel(slabelraw==64)=1;  % c/ rótulo - fundo
-otherlabels = [1:63 65:127 129:254];    
-olfound = intersect(unique(slabelraw),otherlabels);
-if isempty(olfound) % se não outros rótulos, i.e., há apenas duas classes
-    nclass=2;
-else % se há mais rótulos
-    nclass=size(olfound,1)+2;
-    for i=1:nclass-2
-        slabel(slabelraw==olfound(i)) = i+1;
+X(:,7:9) = reshape(imgex, qtnode, 3);
+
+X = zscore(X) .* repmat(fw, qtnode, 1);
+
+% rótulos
+slabelraw = reshape(imgslab, qtnode, 1);
+nodeval   = zeros(qtnode, 1);
+nodeval(slabelraw ~= 0) = 1;
+
+slabel = zeros(qtnode, 1, 'uint16');
+slabel(slabelraw == 0)   = 1;
+slabel(slabelraw == 64)  = 1;
+
+otherlabels = [1:63 65:127 129:254];
+olfound     = intersect(unique(slabelraw), otherlabels);
+
+if isempty(olfound)
+    nclass = 2;
+else
+    nclass = numel(olfound) + 2;
+    for i = 1:(nclass-2)
+        slabel(slabelraw == olfound(i)) = i + 1;
     end
 end
-slabel(slabelraw==255)=nclass; % c/ rótulo - objeto
+slabel(slabelraw == 255) = nclass;
 end
