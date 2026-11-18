@@ -1,0 +1,18 @@
+# MATLAB editor backup and autosave files
+*.asv
+*.m~
+*~
+
+# Editor and operating system temporary files
+*.swp
+*.swo
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Local MATLAB/Simulink generated directories
+slprj/
+codegen/
+
+# The distributed MEX binaries (*.mexw64) are intentionally tracked.
+# Do not ignore them or the example images.
