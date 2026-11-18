@@ -100,6 +100,8 @@ If you use this implementation in academic work, please cite the published artic
 }
 ```
 
-## Licensing
+## License
 
-No explicit software license has been added to this repository. The right to read the code on GitHub does not, by itself, grant permission to redistribute or modify it. Please contact the author regarding permissions.
+The original source code in this repository is licensed under the [Apache License, Version 2.0](LICENSE). Copyright © 2019–2026 Fabricio Aparecido Breve.
+
+Example images or other third-party materials included in the repository are not automatically covered by the source-code license. Their use and redistribution remain subject to any applicable third-party rights and terms.
